@@ -57,7 +57,8 @@ Use this repository in `flake.nix`:
 
 <!-- Add your packages list here -->
 
-| Package    | Description                                                         |
-| ---------- | ------------------------------------------------------------------- |
-| microneo   | Terminal Markdown editor that renders and edits in the same window  |
-| mousedroid | Transform your Android phone into a cross-platform mouse & keyboard |
+| Package     | Description                                                         |
+| ----------- | ------------------------------------------------------------------- |
+| microneo    | Terminal Markdown editor that renders and edits in the same window  |
+| mousedroid  | Transform your Android phone into a cross-platform mouse & keyboard |
+| dbx-desktop | Lightweight database management tool for 70+ databases (Tauri 2)    |

@@ -19,6 +19,7 @@
   example-package = pkgs.callPackage ./pkgs/example-package {};
   microneo = pkgs.callPackage ./pkgs/microneo { };
   mousedroid = pkgs.callPackage ./pkgs/mousedroid { };
+  dbx-desktop = pkgs.callPackage ./pkgs/dbx-desktop { };
   # some-qt5-package = pkgs.libsForQt5.callPackage ./pkgs/some-qt5-package { };
   # ...
 }
