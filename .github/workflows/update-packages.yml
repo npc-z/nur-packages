@@ -1,0 +1,155 @@
+name: Update packages
+
+# Every package that ships `pkgs/<name>/update.sh` + `pkgs/<name>/hashes.json`
+# is updated here, in parallel, one pull request per package. See README
+# "Automatic updates" for the convention a package has to follow.
+
+on:
+  schedule:
+    # Weekly, Monday 03:00 UTC. `*/7` in the day-of-month field is NOT "every
+    # seven days": it restarts at each month boundary and would fire again
+    # after only 2-3 days.
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Space-separated package names to update (empty = every package with an update.sh)'
+        required: false
+        default: ''
+      version:
+        description: 'Exact version to update to (only sensible when a single package is selected)'
+        required: false
+        default: ''
+      build:
+        description: 'Run the full package build as verification'
+        type: boolean
+        default: true
+
+# The repository default for workflows is read-only, and creating a PR branch
+# needs push access.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.list.outputs.packages }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Determine packages
+        id: list
+        env:
+          REQUESTED: ${{ inputs.packages }}
+        run: |
+          set -euo pipefail
+          if [ -n "${REQUESTED:-}" ]; then
+            packages="$REQUESTED"
+          else
+            packages="$(find pkgs -mindepth 2 -maxdepth 2 -name update.sh -printf '%h\n' \
+              | xargs -r -n1 basename | sort | tr '\n' ' ')"
+          fi
+          if [ -z "${packages// /}" ]; then
+            echo "error: no package with pkgs/<name>/update.sh was found" >&2
+            exit 1
+          fi
+          read -ra names <<< "$packages"
+          echo "packages=$(printf '%s\n' "${names[@]}" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+          echo "Updating: $packages"
+
+  update:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      # One broken package must not block the others.
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.packages) }}
+    # Serialise runs per package; never cancel one halfway through, or the PR
+    # branch could be left without its verification build.
+    concurrency:
+      group: update-${{ matrix.package }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup cachix
+        uses: cachix/cachix-action@v17
+        with:
+          name: npc-z
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+      - name: Update ${{ matrix.package }}
+        env:
+          # nix-update reads this for its (paginated) GitHub releases query.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATE_VERSION: ${{ inputs.version }}
+        run: |
+          nix shell --inputs-from . nixpkgs#nix-update \
+            -c "./pkgs/${{ matrix.package }}/update.sh"
+
+      - name: Detect changes
+        id: changes
+        run: |
+          package='${{ matrix.package }}'
+          if [ -z "$(git status --porcelain -- "pkgs/$package")" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "$package is already up to date."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "version=$(nix eval --raw ".#$package.version")" >> "$GITHUB_OUTPUT"
+            release="$(nix eval --raw ".#$package.meta.changelog" 2>/dev/null || true)"
+            if [ -z "$release" ]; then
+              release="$(nix eval --raw ".#$package.meta.homepage" 2>/dev/null || true)"
+            fi
+            echo "release=$release" >> "$GITHUB_OUTPUT"
+            git --no-pager diff --stat -- "pkgs/$package"
+          fi
+
+      # A build realises every fixed-output dependency before compiling, so a
+      # stale hash fails here within minutes; there is no separate hash-only
+      # step to keep this package-agnostic.
+      #
+      # A pull request created with GITHUB_TOKEN does not trigger other
+      # workflows (build.yml included), so the full build has to run here to
+      # keep a real compile-time gate on the bump.
+      - name: Verify package build
+        id: build
+        if: steps.changes.outputs.changed == 'true' && (github.event_name == 'schedule' || inputs.build)
+        run: nix build -L ".#${{ matrix.package }}"
+
+      - name: Create pull request
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          branch: auto/update-${{ matrix.package }}
+          base: main
+          delete-branch: true
+          # Keep the bot's commit limited to the package directory.
+          add-paths: pkgs/${{ matrix.package }}
+          labels: dependencies
+          commit-message: '${{ matrix.package }}: update to ${{ steps.changes.outputs.version }}'
+          title: '${{ matrix.package }}: update to ${{ steps.changes.outputs.version }}'
+          body: |
+            Automated `nix-update` bump of `${{ matrix.package }}` to `${{ steps.changes.outputs.version }}`.
+
+            Only `pkgs/${{ matrix.package }}/hashes.json` is expected to change.
+            ${{ steps.changes.outputs.release && format('Release notes: {0}', steps.changes.outputs.release) || '' }}
+
+            Verification performed in this workflow run:
+            - full package build: `${{ steps.build.outcome }}` (pushed to the `npc-z` cache)
+
+            > Opened by `.github/workflows/update-packages.yml`, which runs weekly.
+            > The same branch is reused, so an open PR is updated in place instead
+            > of a new one being opened on every upstream release.

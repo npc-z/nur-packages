@@ -36,15 +36,22 @@
 , libxfixes
 }:
 
+let
+  # Version and every fixed-output hash live in ./hashes.json so that the
+  # updater (./update.sh, driven by .github/workflows/update-packages.yml)
+  # only ever rewrites data — never this expression. Keep it that way for
+  # every package that joins the update matrix; see README "Automatic updates".
+  versionData = lib.importJSON ./hashes.json;
+in
 stdenv.mkDerivation (finalAttrs: {
   pname = "dbx-desktop";
-  version = "0.5.77";
+  version = versionData.version;
 
   src = fetchFromGitHub {
     owner = "t8y2";
     repo = "dbx";
     rev = "v${finalAttrs.version}";
-    hash = "sha256-zKuxAhL+dFEunGHEw/0C6+EF36QgbbVTCV5Uwt40/Ug=";
+    hash = versionData.srcHash;
   };
 
   # ── Step 1: vendor pnpm (npm) dependencies ──────────────────────── #
@@ -54,27 +61,22 @@ stdenv.mkDerivation (finalAttrs: {
     inherit (finalAttrs) pname version src;
     # `fetcherVersion = 4` is supported for `pnpm_11`
     fetcherVersion = 4;
-    # Update with the hash reported by a failed fixed-output build:
-    #   nix build .#dbx-desktop 2>&1 | grep 'got:'
-    hash = "sha256-iFr+nYvhdFO6Y3fOs3tlhQL/10rgY3f2T1CbjnNZ3Nc=";
+    # Refreshed by ./update.sh together with the rest of hashes.json.
+    hash = versionData.pnpmDepsHash;
   };
 
   # ── Step 2: vendor Cargo dependencies ───────────────────────────── #
-  # Cargo.lock is vendored in-tree (from the pinned tag) so that no
-  # import-from-derivation is needed at evaluation time.
-  cargoDeps = rustPlatform.importCargoLock {
-    lockFile = ./Cargo.lock;
-    # Pin Git checkouts by package name + version (importCargoLock format).
-    # The hash only depends on the commit SHA, so packages sharing a rev
-    # share a hash.
-    outputHashes = {
-      "mysql-common-derive-0.32.2" = "sha256-fw1rDLNh0BByLHjS8Cgc7KQxdj3N51HVMHXvRyETsas=";
-      "mysql_common-0.38.0" = "sha256-fw1rDLNh0BByLHjS8Cgc7KQxdj3N51HVMHXvRyETsas=";
-      "mysql_async-0.37.0" = "sha256-WNp8cdlnoyE4nzwGDhibqLYQbRz9YrsITis59TId5K0=";
-      "postgres-protocol-0.6.12" = "sha256-HRbYVSD7iIwG3m1tOGoIZy0xAZwALWIpTtakVSYPIYI=";
-      "postgres-types-0.2.14" = "sha256-HRbYVSD7iIwG3m1tOGoIZy0xAZwALWIpTtakVSYPIYI=";
-      "tokio-postgres-0.7.18" = "sha256-HRbYVSD7iIwG3m1tOGoIZy0xAZwALWIpTtakVSYPIYI=";
-    };
+  # fetchCargoVendor reads Cargo.lock directly from `src` and vendors every
+  # registry and git dependency into a fixed-output store path — including
+  # the `[patch.crates-io]` git checkouts used by dbx. This is the current
+  # nixpkgs-recommended fetcher and replaces the older importCargoLock
+  # approach, so neither a committed Cargo.lock copy nor per-git-dependency
+  # `outputHashes` need to be maintained in this repository.
+  #
+  # Refreshed by ./update.sh together with the rest of hashes.json.
+  cargoDeps = rustPlatform.fetchCargoVendor {
+    inherit (finalAttrs) pname version src;
+    hash = versionData.cargoDepsHash;
   };
 
   # ── Native build tools (available during build, not linked) ──────── #
@@ -280,6 +282,12 @@ stdenv.mkDerivation (finalAttrs: {
     runHook postInstall
   '';
 
+  # ── Update automation ────────────────────────────────────────────── #
+  # `nix-update --flake dbx-desktop` (driven by ./update.sh and the
+  # scheduled "Update dbx-desktop" workflow) refreshes version, src hash,
+  # pnpmDeps hash and the fetchCargoVendor hash in one pass.
+  passthru.updateScript = ./update.sh;
+
   # ── Metadata ─────────────────────────────────────────────────────── #
   meta = with lib; {
     description = "DBX desktop — open-source database management tool (Tauri 2)";
@@ -289,6 +297,7 @@ stdenv.mkDerivation (finalAttrs: {
     '';
     license = licenses.asl20;
     homepage = "https://github.com/t8y2/dbx";
+    changelog = "https://github.com/t8y2/dbx/releases/tag/v${finalAttrs.version}";
     maintainers = with maintainers; [ ];
     platforms = platforms.linux; # macOS/Windows need platform-specific adjustments
     mainProgram = "dbx-desktop";
