@@ -153,9 +153,12 @@ jobs:
       # stale hash fails here within minutes; there is no separate hash-only
       # step to keep this package-agnostic.
       #
-      # A pull request created with GITHUB_TOKEN does not trigger other
-      # workflows (build.yml included), so the full build has to run here to
-      # keep a real compile-time gate on the bump.
+      # This build is also the unattended gate. Since GitHub's 2026-06 change, a
+      # pull request opened by github-actions[bot] *can* run build.yml, but the
+      # run is held until a user with write access approves it. Passing
+      # UPDATE_TOKEN (a fine-grained PAT) below makes the pull request
+      # user-authored, so its CI runs on its own — and this build still guards
+      # the case where no PAT is configured.
       - name: Verify package build
         id: build
         if: steps.changes.outputs.changed == 'true' && (github.event_name == 'schedule' || inputs.build)
@@ -165,6 +168,9 @@ jobs:
         if: steps.changes.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v8
         with:
+          # Falls back to GITHUB_TOKEN until the UPDATE_TOKEN secret exists, so
+          # the workflow keeps working while the PAT is being set up.
+          token: ${{ secrets.UPDATE_TOKEN || secrets.GITHUB_TOKEN }}
           branch: auto/update-${{ matrix.package }}
           base: main
           delete-branch: true

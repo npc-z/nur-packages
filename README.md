@@ -121,6 +121,23 @@ bump and the hashes it invalidates travel in the same pull request, so a
 lock-only change can never land with stale hashes behind it. Pass
 `flake: false` on a manual run to update a package without bumping nixpkgs.
 
+### The `UPDATE_TOKEN` secret
+
+GitHub holds the CI run of a pull request opened by `github-actions[bot]` until
+a user with write access approves it, so generated code cannot silently run
+workflows that can reach secrets
+([changelog](https://github.blog/changelog/2026-06-11-bot-created-pull-requests-can-run-workflows-if-approved/)).
+The workflow therefore opens its pull request with a fine-grained PAT stored as
+the `UPDATE_TOKEN` secret, which makes the pull request user-authored so its
+`build.yml` checks start by themselves. Without the secret it falls back to
+`GITHUB_TOKEN` and the pull request still opens — its checks just wait for an
+approval click.
+
+Token scopes (fine-grained, this repository only): `Contents: Read and write`,
+`Pull requests: Read and write`. Create and store it with
+[`scripts/setup-update-token.sh`](scripts/setup-update-token.sh), which walks
+through the token page and writes the secret.
+
 ### Updating by hand
 
 ```sh
