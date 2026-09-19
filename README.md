@@ -111,9 +111,15 @@ packages must pass their toolchain explicitly (e.g. `pnpm = pnpm_11`) instead
 of relying on a default that nixpkgs may retarget.
 
 When the toolchain does move — say a `flake.lock` bump — every package's
-dependency hashes are re-derived automatically: the weekly workflow first
-tries a normal update, and if the version is already current it runs
-`update.sh` again with `UPDATE_DEPS_ONLY=1`, which refreshes only the hashes.
+dependency hashes are re-derived automatically: the weekly workflow bumps
+`flake.lock` first, then tries a normal update, and if the version is already
+current it runs `update.sh` again with `UPDATE_DEPS_ONLY=1`, which refreshes
+only the hashes.
+
+Because of that, **`flake.lock` is owned by the bot**, not dependabot: the lock
+bump and the hashes it invalidates travel in the same pull request, so a
+lock-only change can never land with stale hashes behind it. Pass
+`flake: false` on a manual run to update a package without bumping nixpkgs.
 
 ### Updating by hand
 

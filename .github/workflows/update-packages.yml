@@ -24,6 +24,10 @@ on:
         description: 'Run the full package build as verification'
         type: boolean
         default: true
+      flake:
+        description: 'Also bump the pinned nixpkgs (flake.lock) in this run'
+        type: boolean
+        default: true
 
 # The repository default for workflows is read-only, and creating a PR branch
 # needs push access.
@@ -90,6 +94,14 @@ jobs:
           name: npc-z
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
+      # nixpkgs moves the pnpm/node toolchain that several fixed-output hashes
+      # depend on. Bumping the lock first and re-deriving the hashes in the same
+      # workspace keeps the two in one pull request, so a lock-only change can
+      # never leave main with hashes that no longer match.
+      - name: Update flake.lock
+        if: github.event_name == 'schedule' || inputs.flake
+        run: nix flake update nixpkgs
+
       - name: Update ${{ matrix.package }}
         env:
           # nix-update reads this for its (paginated) GitHub releases query.
@@ -110,7 +122,7 @@ jobs:
         id: changes
         run: |
           package='${{ matrix.package }}'
-          if [ -z "$(git status --porcelain -- "pkgs/$package")" ]; then
+          if [ -z "$(git status --porcelain -- "pkgs/$package" flake.lock)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "$package is already up to date."
             exit 0
@@ -122,10 +134,12 @@ jobs:
           if [ -z "$release" ]; then
             release="$(nix eval --raw ".#$package.meta.homepage" 2>/dev/null || true)"
           fi
-          if [ "$version" = "$base_version" ]; then
+          if [ "$version" != "$base_version" ]; then
+            title="$package: update to $version"
+          elif [ -n "$(git status --porcelain -- "pkgs/$package")" ]; then
             title="$package: refresh dependency hashes"
           else
-            title="$package: update to $version"
+            title="$package: update nixpkgs"
           fi
           {
             echo "changed=true"
@@ -133,7 +147,7 @@ jobs:
             echo "release=$release"
             echo "title=$title"
           } >> "$GITHUB_OUTPUT"
-          git --no-pager diff --stat -- "pkgs/$package"
+          git --no-pager diff --stat -- "pkgs/$package" flake.lock
 
       # A build realises every fixed-output dependency before compiling, so a
       # stale hash fails here within minutes; there is no separate hash-only
@@ -154,15 +168,19 @@ jobs:
           branch: auto/update-${{ matrix.package }}
           base: main
           delete-branch: true
-          # Keep the bot's commit limited to the package directory.
-          add-paths: pkgs/${{ matrix.package }}
+          # Keep the bot's commit limited to the package directory plus the lock
+          # bump whose hashes it re-derived.
+          add-paths: |
+            flake.lock
+            pkgs/${{ matrix.package }}
           labels: dependencies
           commit-message: '${{ steps.changes.outputs.title }}'
           title: '${{ steps.changes.outputs.title }}'
           body: |
             Automated `nix-update` run for `${{ matrix.package }}` (`${{ steps.changes.outputs.version }}`).
 
-            Only `pkgs/${{ matrix.package }}/hashes.json` is expected to change.
+            `pkgs/${{ matrix.package }}/hashes.json` — and `flake.lock` when nixpkgs
+            moved — are the only expected changes.
             ${{ steps.changes.outputs.release && format('Release notes: {0}', steps.changes.outputs.release) || '' }}
 
             Verification performed in this workflow run:
