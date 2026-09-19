@@ -59,6 +59,11 @@ stdenv.mkDerivation (finalAttrs: {
   # a content-addressed store path so the build sandbox has no network. #
   pnpmDeps = fetchPnpmDeps {
     inherit (finalAttrs) pname version src;
+    # Pin the fetcher to the same pnpm the build uses. By default
+    # `fetchPnpmDeps` follows `pkgs.pnpm`, which moves across nixpkgs
+    # revisions (e.g. 11.x -> 12.x); an un-pinned fetcher would then produce a
+    # store this expression's `pnpm_11` cannot consume.
+    pnpm = pnpm_11;
     # `fetcherVersion = 4` is supported for `pnpm_11`
     fetcherVersion = 4;
     # Refreshed by ./update.sh together with the rest of hashes.json.

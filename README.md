@@ -96,6 +96,25 @@ package joins simply by following the convention below.
 The updater (`nix-update`) then rewrites `hashes.json` alone, so a bot pull
 request only ever changes data — never packaging code.
 
+### Why builds are pinned, and hash drift
+
+[`build.yml`](.github/workflows/build.yml) evaluates the package set against
+three nixpkgs channels (compatibility signal) but **builds against the nixpkgs
+revision pinned in `flake.lock`** — the same revision the updater derives
+hashes with.
+
+That matters because some fixed-output hashes are a function of the nixpkgs
+toolchain, not just of the upstream sources: `fetchPnpmDeps` output changes
+when the pnpm version changes (`pkgs.pnpm` moved from 11.x to 12.x on
+unstable), so a hash can never match a *moving* channel. For the same reason,
+packages must pass their toolchain explicitly (e.g. `pnpm = pnpm_11`) instead
+of relying on a default that nixpkgs may retarget.
+
+When the toolchain does move — say a `flake.lock` bump — every package's
+dependency hashes are re-derived automatically: the weekly workflow first
+tries a normal update, and if the version is already current it runs
+`update.sh` again with `UPDATE_DEPS_ONLY=1`, which refreshes only the hashes.
+
 ### Updating by hand
 
 ```sh
@@ -104,6 +123,9 @@ nix shell --inputs-from . nixpkgs#nix-update -c ./pkgs/dbx-desktop/update.sh
 
 # or pin an exact version
 UPDATE_VERSION=0.6.16 nix shell --inputs-from . nixpkgs#nix-update -c ./pkgs/dbx-desktop/update.sh
+
+# or re-derive the dependency hashes for the locked nixpkgs only
+UPDATE_DEPS_ONLY=1 nix shell --inputs-from . nixpkgs#nix-update -c ./pkgs/dbx-desktop/update.sh
 ```
 
 Then verify with `nix build .#dbx-desktop`.

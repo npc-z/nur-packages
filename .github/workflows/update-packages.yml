@@ -98,6 +98,13 @@ jobs:
         run: |
           nix shell --inputs-from . nixpkgs#nix-update \
             -c "./pkgs/${{ matrix.package }}/update.sh"
+          # Nothing moved? Dependency hashes can still have drifted with the
+          # nixpkgs pinned in flake.lock, because its pnpm/node toolchain moves
+          # under them. Re-derive just the hashes and let the PR heal that.
+          if [ -z "$(git status --porcelain -- "pkgs/${{ matrix.package }}")" ]; then
+            UPDATE_DEPS_ONLY=1 nix shell --inputs-from . nixpkgs#nix-update \
+              -c "./pkgs/${{ matrix.package }}/update.sh"
+          fi
 
       - name: Detect changes
         id: changes
@@ -106,16 +113,27 @@ jobs:
           if [ -z "$(git status --porcelain -- "pkgs/$package")" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "$package is already up to date."
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "version=$(nix eval --raw ".#$package.version")" >> "$GITHUB_OUTPUT"
-            release="$(nix eval --raw ".#$package.meta.changelog" 2>/dev/null || true)"
-            if [ -z "$release" ]; then
-              release="$(nix eval --raw ".#$package.meta.homepage" 2>/dev/null || true)"
-            fi
-            echo "release=$release" >> "$GITHUB_OUTPUT"
-            git --no-pager diff --stat -- "pkgs/$package"
+            exit 0
           fi
+          version="$(nix eval --raw ".#$package.version")"
+          # HEAD is still the base checkout: the bot does not commit.
+          base_version="$(git show "HEAD:pkgs/$package/hashes.json" 2>/dev/null | jq -r .version || true)"
+          release="$(nix eval --raw ".#$package.meta.changelog" 2>/dev/null || true)"
+          if [ -z "$release" ]; then
+            release="$(nix eval --raw ".#$package.meta.homepage" 2>/dev/null || true)"
+          fi
+          if [ "$version" = "$base_version" ]; then
+            title="$package: refresh dependency hashes"
+          else
+            title="$package: update to $version"
+          fi
+          {
+            echo "changed=true"
+            echo "version=$version"
+            echo "release=$release"
+            echo "title=$title"
+          } >> "$GITHUB_OUTPUT"
+          git --no-pager diff --stat -- "pkgs/$package"
 
       # A build realises every fixed-output dependency before compiling, so a
       # stale hash fails here within minutes; there is no separate hash-only
@@ -139,10 +157,10 @@ jobs:
           # Keep the bot's commit limited to the package directory.
           add-paths: pkgs/${{ matrix.package }}
           labels: dependencies
-          commit-message: '${{ matrix.package }}: update to ${{ steps.changes.outputs.version }}'
-          title: '${{ matrix.package }}: update to ${{ steps.changes.outputs.version }}'
+          commit-message: '${{ steps.changes.outputs.title }}'
+          title: '${{ steps.changes.outputs.title }}'
           body: |
-            Automated `nix-update` bump of `${{ matrix.package }}` to `${{ steps.changes.outputs.version }}`.
+            Automated `nix-update` run for `${{ matrix.package }}` (`${{ steps.changes.outputs.version }}`).
 
             Only `pkgs/${{ matrix.package }}/hashes.json` is expected to change.
             ${{ steps.changes.outputs.release && format('Release notes: {0}', steps.changes.outputs.release) || '' }}

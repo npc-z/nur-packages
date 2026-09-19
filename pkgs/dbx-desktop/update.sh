@@ -9,6 +9,7 @@
 # Usage:
 #   ./pkgs/dbx-desktop/update.sh                       # newest stable release
 #   UPDATE_VERSION=0.6.16 ./pkgs/dbx-desktop/update.sh # pin an exact version
+#   UPDATE_DEPS_ONLY=1 ./pkgs/dbx-desktop/update.sh    # re-derive hashes only
 #
 # Requires `nix-update` (and the `nix-prefetch-git` it shells out to) on
 # PATH, e.g.:
@@ -48,7 +49,13 @@ args=(
   --override-filename "$package_dir/hashes.json"
 )
 
-if [[ -n "${UPDATE_VERSION:-}" ]]; then
+if [[ -n "${UPDATE_DEPS_ONLY:-}" ]]; then
+  # Refresh the dependency hashes against the currently locked nixpkgs without
+  # looking for a new upstream release. pnpm/npm hashes are a function of the
+  # nixpkgs toolchain, so a nixpkgs bump drifts them even when the version is
+  # unchanged; the weekly workflow runs this pass to heal that.
+  args+=(--version=skip --no-src)
+elif [[ -n "${UPDATE_VERSION:-}" ]]; then
   args+=(--version="$UPDATE_VERSION")
 fi
 

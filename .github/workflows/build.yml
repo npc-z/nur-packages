@@ -31,7 +31,51 @@ on:
       - '.github/workflows/build.yml'
   workflow_dispatch:
 jobs:
-  tests:
+  # Compatibility signal: the package set must still *evaluate* against the
+  # nixpkgs channels users may bring. Evaluation never realises a
+  # fixed-output derivation, so a channel bump cannot fail this job over a
+  # stale dependency hash.
+  evaluate:
+    name: "Evaluate (${{ matrix.nixPath }})"
+    strategy:
+      # Report every channel instead of cancelling the rest on the first failure.
+      fail-fast: false
+      matrix:
+        nixPath:
+          - nixpkgs=https://github.com/NixOS/nixpkgs/archive/refs/heads/nixpkgs-unstable.tar.gz
+          - nixpkgs=https://github.com/NixOS/nixpkgs/archive/refs/heads/nixos-unstable.tar.gz
+          - nixpkgs=https://github.com/NixOS/nixpkgs/archive/refs/heads/nixos-26.05.tar.gz
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+    - name: Install nix
+      uses: cachix/install-nix-action@v31
+      with:
+        nix_path: "${{ matrix.nixPath }}"
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+          access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    - name: Show nixpkgs version
+      run: nix-instantiate --eval -E '(import <nixpkgs> {}).lib.version'
+    - name: Check evaluation
+      run: |
+        nix-env -f . -qa \* --meta --xml \
+          --allowed-uris https://static.rust-lang.org \
+          --option restrict-eval true \
+          --option allow-import-from-derivation true \
+          --drv-path --show-trace \
+          -I "nixpkgs=$(nix-instantiate --find-file nixpkgs)" \
+          -I "$PWD"
+
+  # Build and cache against the nixpkgs revision pinned in flake.lock, which is
+  # also the revision the update bot derives hashes with. Building against a
+  # moving channel instead would fail whenever that channel's pnpm or node
+  # toolchain moves, because pnpmDeps/npmDeps hashes are a function of the
+  # toolchain: nixpkgs promoted pnpm 12 to `pkgs.pnpm` and every pnpm-based
+  # package hash changed with it, while flake.lock still said pnpm 11.
+  build:
+    needs: evaluate
     strategy:
       matrix:
         # Set this to notify the global nur package registry that changes are
@@ -53,18 +97,19 @@ jobs:
         # https://github.com/<your_githubname>/nur-packages/settings/secrets
         cachixName:
           - npc-z
-        nixPath:
-          - nixpkgs=https://github.com/NixOS/nixpkgs/archive/refs/heads/nixpkgs-unstable.tar.gz
-          - nixpkgs=https://github.com/NixOS/nixpkgs/archive/refs/heads/nixos-unstable.tar.gz
-          - nixpkgs=https://github.com/NixOS/nixpkgs/archive/refs/heads/nixos-26.05.tar.gz
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
       uses: actions/checkout@v7
+    - name: Read the pinned nixpkgs from flake.lock
+      id: pinned
+      run: |
+        rev="$(jq -r '.nodes.nixpkgs.locked.rev' flake.lock)"
+        echo "nixPath=nixpkgs=https://github.com/NixOS/nixpkgs/archive/${rev}.tar.gz" >> "$GITHUB_OUTPUT"
     - name: Install nix
       uses: cachix/install-nix-action@v31
       with:
-        nix_path: "${{ matrix.nixPath }}"
+        nix_path: "${{ steps.pinned.outputs.nixPath }}"
         extra_nix_config: |
           experimental-features = nix-command flakes
           access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
@@ -78,15 +123,6 @@ jobs:
         name: ${{ matrix.cachixName }}
         signingKey: '${{ secrets.CACHIX_SIGNING_KEY }}'
         authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-    - name: Check evaluation
-      run: |
-        nix-env -f . -qa \* --meta --xml \
-          --allowed-uris https://static.rust-lang.org \
-          --option restrict-eval true \
-          --option allow-import-from-derivation true \
-          --drv-path --show-trace \
-          -I nixpkgs=$(nix-instantiate --find-file nixpkgs) \
-          -I $PWD
     - name: Build nix packages
       run: nix shell -f '<nixpkgs>' nix-build-uncached -c nix-build-uncached ci.nix -A cacheOutputs
     - name: Trigger NUR update
