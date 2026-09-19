@@ -1,3 +1,5 @@
+[English](README.md) · [简体中文](README.zh-CN.md)
+
 # npc-z' Nix User Repository
 
 **My personal [NUR repository](https://github.com/npc-z/nur-packages)**
