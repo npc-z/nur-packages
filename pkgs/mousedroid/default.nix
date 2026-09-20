@@ -12,15 +12,21 @@
 , android-tools
 }:
 
+let
+  # Version and every fixed-output hash live in ./hashes.json so that the
+  # updater only ever rewrites data — never this expression. See README
+  # "Automatic updates".
+  versionData = lib.importJSON ./hashes.json;
+in
 stdenv.mkDerivation (finalAttrs: {
   pname = "mousedroid";
-  version = "1.5";
+  version = versionData.version;
 
   src = fetchFromGitHub {
     owner = "darusc";
     repo = "Mousedroid";
     rev = "v${finalAttrs.version}";
-    hash = "sha256-7qwADm+7m7TBJWlG7pqFtynb/RTcVm9O2z7Ri+ITm8g=";
+    hash = versionData.srcHash;
   };
 
   sourceRoot = "source/server";
@@ -88,6 +94,8 @@ list(REMOVE_ITEM ALL_SRC ''${WIN32_SRC})'
       --prefix PATH : ${lib.makeBinPath [ android-tools ]}
   '';
 
+  passthru.updateScript = ./update.sh;
+
   meta = with lib; {
     description = "Transform your Android phone into a cross-platform mouse & keyboard";
     longDescription = ''
@@ -104,6 +112,7 @@ list(REMOVE_ITEM ALL_SRC ''${WIN32_SRC})'
       udev rules (see the project README).
     '';
     homepage = "https://github.com/darusc/Mousedroid";
+    changelog = "https://github.com/darusc/Mousedroid/releases/tag/v${finalAttrs.version}";
     license = licenses.mit;
     mainProgram = "mousedroid";
     maintainers = with maintainers; [ ];
