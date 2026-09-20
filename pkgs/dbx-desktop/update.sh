@@ -7,13 +7,13 @@
 # hashes) and never touches the packaging expression.
 #
 # Usage:
-#   ./pkgs/dbx-desktop/update.sh                       # newest stable release
-#   UPDATE_VERSION=0.6.16 ./pkgs/dbx-desktop/update.sh # pin an exact version
-#   UPDATE_DEPS_ONLY=1 ./pkgs/dbx-desktop/update.sh    # re-derive hashes only
+#   ./pkgs/<name>/update.sh                       # newest stable release
+#   UPDATE_VERSION=1.2.3 ./pkgs/<name>/update.sh  # pin an exact version
+#   UPDATE_DEPS_ONLY=1 ./pkgs/<name>/update.sh    # re-derive hashes only
 #
 # Requires `nix-update` (and the `nix-prefetch-git` it shells out to) on
 # PATH, e.g.:
-#   nix shell --inputs-from . nixpkgs#nix-update -c ./pkgs/dbx-desktop/update.sh
+#   nix shell --inputs-from . nixpkgs#nix-update -c ./pkgs/<name>/update.sh
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"

@@ -70,14 +70,16 @@ Use this repository in `flake.nix`:
 [`update-packages.yml`](.github/workflows/update-packages.yml) runs every
 Monday: for each package it checks upstream for a new release, verifies the
 package builds, and opens (or refreshes) a pull request on the
-`auto/update-<package>` branch. Today it maintains `dbx-desktop`; a new
-package joins simply by following the convention below.
+`auto/update-<package>` branch. Today it maintains `dbx-desktop`, `microneo`
+and `mousedroid`; a new package joins simply by following the convention
+below.
 
 ### Convention
 
 1. **`pkgs/<name>/hashes.json`** holds every version-dependent value. It must
    contain `"version"`; the other keys are the fixed-output hashes used by the
-   expression (`srcHash`, `pnpmDepsHash`, `cargoDepsHash`, `npmDepsHash`, …).
+   expression (`srcHash`, `pnpmDepsHash`, `cargoDepsHash`, `npmDepsHash`,
+   `vendorHash`, …).
 2. **`pkgs/<name>/default.nix` stays version-agnostic** — it reads the values,
    it never hardcodes them:
 
@@ -93,7 +95,8 @@ package joins simply by following the convention below.
 
 3. **`pkgs/<name>/update.sh`** is a copy of an existing one (the package name
    is derived from the script's own path) and only needs its `version_regex`
-   adjusted if upstream tags are not plain `vX.Y.Z`.
+   adjusted if upstream tags are not plain `vX.Y.Z` — `mousedroid`, whose tags
+   are two-component, uses `^v([0-9]+\.[0-9]+)$`.
 
 The updater (`nix-update`) then rewrites `hashes.json` alone, so a bot pull
 request only ever changes data — never packaging code.

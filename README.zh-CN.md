@@ -67,11 +67,11 @@ nix run github:npc-z/nur-packages#some-package
 
 ## 自动更新
 
-[`update-packages.yml`](.github/workflows/update-packages.yml) 每周一运行：逐个软件包检查上游是否有新版本、验证能否构建，并在 `auto/update-<package>` 分支上开启（或刷新）一个 PR。目前它维护 `dbx-desktop`；新软件包只要遵循下面的约定就能自动接入。
+[`update-packages.yml`](.github/workflows/update-packages.yml) 每周一运行：逐个软件包检查上游是否有新版本、验证能否构建，并在 `auto/update-<package>` 分支上开启（或刷新）一个 PR。目前它维护 `dbx-desktop`、`microneo` 与 `mousedroid`；新软件包只要遵循下面的约定就能自动接入。
 
 ### 约定
 
-1. **`pkgs/<name>/hashes.json`** 保存所有与版本相关的值。它必须包含 `"version"`，其余键是表达式用到的固定输出（fixed-output）哈希：`srcHash`、`pnpmDepsHash`、`cargoDepsHash`、`npmDepsHash` 等。
+1. **`pkgs/<name>/hashes.json`** 保存所有与版本相关的值。它必须包含 `"version"`，其余键是表达式用到的固定输出（fixed-output）哈希：`srcHash`、`pnpmDepsHash`、`cargoDepsHash`、`npmDepsHash`、`vendorHash` 等。
 2. **`pkgs/<name>/default.nix` 保持与版本无关** —— 只读取这些值，绝不写死：
 
    ```nix
@@ -84,7 +84,7 @@ nix run github:npc-z/nur-packages#some-package
    })
    ```
 
-3. **`pkgs/<name>/update.sh`** 直接复制现成的一份即可（包名由脚本自身路径推导）；只有当上游 tag 不是纯 `vX.Y.Z` 时，才需要调整其中的 `version_regex`。
+3. **`pkgs/<name>/update.sh`** 直接复制现成的一份即可（包名由脚本自身路径推导）；只有当上游 tag 不是纯 `vX.Y.Z` 时，才需要调整其中的 `version_regex` —— 例如 `mousedroid` 的 tag 是两段式，用的是 `^v([0-9]+\.[0-9]+)$`。
 
 更新器（`nix-update`）因此只会改写 `hashes.json`，机器人开的 PR 只动数据，永不碰打包代码。
 
