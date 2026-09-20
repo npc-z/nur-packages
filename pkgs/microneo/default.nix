@@ -1,16 +1,22 @@
 {lib, buildGoModule, fetchFromGitHub}:
+let
+  # Version and every fixed-output hash live in ./hashes.json so that the
+  # updater only ever rewrites data — never this expression. See README
+  # "Automatic updates".
+  versionData = lib.importJSON ./hashes.json;
+in
 buildGoModule rec {
   pname = "microneo";
-  version = "1.1.0";
+  version = versionData.version;
 
   src = fetchFromGitHub {
     owner = "sollawen";
     repo = "microNeo";
     rev = "v${version}";
-    hash = "sha256-Ae8p1JoToQsZR1xAQV6u2YR8Fp3ZQdmAFIxTM/FoXOg=";
+    hash = versionData.srcHash;
   };
 
-  vendorHash = "sha256-bkPd6zB9e4q6N20wbKS8n8zGGITOoScajdPYv7Race0=";
+  vendorHash = versionData.vendorHash;
   proxyVendor = true;
 
   doCheck = false;
@@ -34,6 +40,8 @@ buildGoModule rec {
     mv $out/bin/micro $out/bin/microneo
   '';
 
+  passthru.updateScript = ./update.sh;
+
   meta = with lib; {
     description = "Terminal Markdown editor that renders and edits in the same window";
     longDescription = ''
@@ -44,6 +52,7 @@ buildGoModule rec {
       100+ languages, mouse support, multiple cursors, and Lua plugins.
     '';
     homepage = "https://github.com/sollawen/microNeo";
+    changelog = "https://github.com/sollawen/microNeo/releases/tag/v${version}";
     license = licenses.mit;
     mainProgram = "microneo";
     maintainers = with maintainers; [ ];
