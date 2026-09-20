@@ -59,11 +59,11 @@ nix run github:npc-z/nur-packages#some-package
 
 <!-- Add your packages list here -->
 
-| 软件包      | 说明                                                  |
-| ----------- | ----------------------------------------------------- |
-| microneo    | 终端 Markdown 编辑器，渲染与编辑在同一窗口完成        |
-| mousedroid  | 把 Android 手机变成跨平台的鼠标与键盘                 |
-| dbx-desktop | 支持 70+ 数据库的轻量数据库管理工具（Tauri 2）        |
+| 软件包                                                | 说明                            |
+| -------------------------------------------------- | ----------------------------- |
+| [microneo](https://github.com/sollawen/microNeo)   | 终端 Markdown 编辑器，渲染与编辑在同一窗口完成  |
+| [mousedroid](https://github.com/darusc/Mousedroid) | 把 Android 手机变成跨平台的鼠标与键盘       |
+| [dbx-desktop](https://github.com/t8y2/dbx)         | 支持 70+ 数据库的轻量数据库管理工具（Tauri 2） |
 
 ## 自动更新
 
