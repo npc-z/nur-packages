@@ -13,9 +13,6 @@
 }:
 
 let
-  # Version and every fixed-output hash live in ./hashes.json so that the
-  # updater only ever rewrites data — never this expression. See README
-  # "Automatic updates".
   versionData = lib.importJSON ./hashes.json;
 in
 stdenv.mkDerivation (finalAttrs: {

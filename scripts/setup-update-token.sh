@@ -195,10 +195,6 @@ banner "nur-packages update bot: PAT so PR checks run unattended"
 
 # ── Stage 1 ───────────────────────────────────────────────────────────────
 stage "Create a fine-grained personal access token"
-say "GitHub holds the CI run of a pull request opened by github-actions[bot]"
-say "until a user with write access approves it, so generated code cannot"
-say "silently run workflows with access to secrets. Opening the pull request"
-say "with a PAT makes it user-authored, and its checks then start on their own."
 open_url "https://github.com/settings/personal-access-tokens/new"
 step "Token name: nur-packages-update-bot"
 step "Expiration: 90 days — re-run this wizard when it lapses."
@@ -215,8 +211,6 @@ note "Deliberately not written to .env: this value only belongs in the repo secr
 
 # ── Stage 2 ───────────────────────────────────────────────────────────────
 stage "Store it as the UPDATE_TOKEN repository secret"
-say "The weekly workflow passes it to create-pull-request as \`token:\`, and"
-say "falls back to GITHUB_TOKEN while the secret is absent."
 set_secret UPDATE_TOKEN "$UPDATE_TOKEN"
 if gh secret list -R npc-z/nur-packages 2>/dev/null | grep -q '^UPDATE_TOKEN'; then
   printf '  %s✓ confirmed%s UPDATE_TOKEN is listed on npc-z/nur-packages\n' "$GREEN" "$RESET"
@@ -232,7 +226,7 @@ if confirm "Trigger update-packages.yml now? (~1 hour; may open or refresh a PR)
   gh workflow run update-packages.yml -f build=true -f flake=true -R npc-z/nur-packages
   note "watch it: gh run list -R npc-z/nur-packages -L 3"
 else
-  note "skipped — the Monday 03:00 UTC schedule will exercise it instead"
+  note "skipped — the scheduled run will exercise it instead"
 fi
 
 finish

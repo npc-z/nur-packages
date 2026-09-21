@@ -67,7 +67,12 @@ nix run github:npc-z/nur-packages#some-package
 
 ## 自动更新
 
-[`update-packages.yml`](.github/workflows/update-packages.yml) 每周一运行：逐个软件包检查上游是否有新版本、验证能否构建，并在 `auto/update-<package>` 分支上开启（或刷新）一个 PR。目前它维护 `dbx-desktop`、`microneo` 与 `mousedroid`；新软件包只要遵循下面的约定就能自动接入。
+[`update-packages.yml`](.github/workflows/update-packages.yml) 每天运行，最多在 `auto/update-packages` 分支上开一个 PR：先升级钉住的 nixpkgs，再逐个软件包检查上游是否有新版本，并验证变化过的包能否构建。目前它维护 `dbx-desktop`、`microneo` 与 `mousedroid`；新软件包只要遵循下面的约定就能自动接入。
+
+该工作流自身的注释是「它如何工作、为什么这样设计」的权威说明 —— 定时策略、批量更新、`flake.lock` 的归属、哈希重新推导都写在那里。从外部使用需要知道两点：
+
+- **`flake.lock` 由机器人负责升级**，而不是 dependabot：依赖哈希是钉住的 nixpkgs 工具链的函数，而不只是上游源码的函数，所以升锁与它导致失效的哈希必须在同一个 PR 里落地。若一个 PR 里只有升锁、没有任何软件包变化，则要等这个 pin 满一周（或手动触发）才会开；手动运行时可用 `flake: false` 完全不动 nixpkgs。
+- **[`build.yml`](.github/workflows/build.yml) 使用 `flake.lock` 钉住的 nixpkgs 构建** —— 用三个通道评估包集合只是兼容性信号 —— 因此软件包必须显式传入自己的工具链（例如 `pnpm = pnpm_11`），而不能依赖 nixpkgs 可能改变指向的默认值。
 
 ### 约定
 
@@ -87,16 +92,6 @@ nix run github:npc-z/nur-packages#some-package
 3. **`pkgs/<name>/update.sh`** 直接复制现成的一份即可（包名由脚本自身路径推导）；只有当上游 tag 不是纯 `vX.Y.Z` 时，才需要调整其中的 `version_regex` —— 例如 `mousedroid` 的 tag 是两段式，用的是 `^v([0-9]+\.[0-9]+)$`。
 
 更新器（`nix-update`）因此只会改写 `hashes.json`，机器人开的 PR 只动数据，永不碰打包代码。
-
-### 为什么构建要钉住版本，以及哈希漂移
-
-[`build.yml`](.github/workflows/build.yml) 用三个 nixpkgs 通道**评估**包集合（作为兼容性信号），但**构建时使用 `flake.lock` 中钉住的 nixpkgs revision** —— 也就是更新器用来计算哈希的那个 revision。
-
-这一点很关键：有些固定输出哈希是 nixpkgs 工具链的函数，而不只是上游源码的函数。`fetchPnpmDeps` 的产物会随 pnpm 版本变化（unstable 上 `pkgs.pnpm` 已从 11.x 升到 12.x），所以同一个哈希永远无法匹配*滚动*的通道。同理，软件包必须显式传入自己的工具链（例如 `pnpm = pnpm_11`），而不能依赖 nixpkgs 可能改变指向的默认值。
-
-当工具链确实变化时（例如一次 `flake.lock` 升级），每个包的依赖哈希都会被自动重新推导：每周的工作流先升级 `flake.lock`，再尝试常规更新；如果版本已经是最新，就用 `UPDATE_DEPS_ONLY=1` 再跑一次 `update.sh`，只刷新哈希。
-
-正因为如此，**`flake.lock` 由机器人负责升级**，而不是 dependabot：锁升级与它导致失效的哈希会出现在同一个 PR 里，因此不可能出现“只升锁、哈希却是旧的”这种落地。手动运行时可用 `flake: false` 只更新软件包而不动 nixpkgs。
 
 ### `UPDATE_TOKEN` secret
 

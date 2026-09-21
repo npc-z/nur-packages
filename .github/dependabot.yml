@@ -1,8 +1,6 @@
 version: 2
 updates:
-  # flake.lock is deliberately not listed here: .github/workflows/update-packages.yml
-  # bumps nixpkgs together with the dependency hashes that bump invalidates, so
-  # a lock-only PR can never land with stale hashes behind it.
+  # flake.lock is kept by .github/workflows/update-packages.yml, not dependabot.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

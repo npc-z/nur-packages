@@ -37,10 +37,6 @@
 }:
 
 let
-  # Version and every fixed-output hash live in ./hashes.json so that the
-  # updater (./update.sh, driven by .github/workflows/update-packages.yml)
-  # only ever rewrites data — never this expression. Keep it that way for
-  # every package that joins the update matrix; see README "Automatic updates".
   versionData = lib.importJSON ./hashes.json;
 in
 stdenv.mkDerivation (finalAttrs: {
@@ -66,7 +62,6 @@ stdenv.mkDerivation (finalAttrs: {
     pnpm = pnpm_11;
     # `fetcherVersion = 4` is supported for `pnpm_11`
     fetcherVersion = 4;
-    # Refreshed by ./update.sh together with the rest of hashes.json.
     hash = versionData.pnpmDepsHash;
   };
 
@@ -77,8 +72,6 @@ stdenv.mkDerivation (finalAttrs: {
   # nixpkgs-recommended fetcher and replaces the older importCargoLock
   # approach, so neither a committed Cargo.lock copy nor per-git-dependency
   # `outputHashes` need to be maintained in this repository.
-  #
-  # Refreshed by ./update.sh together with the rest of hashes.json.
   cargoDeps = rustPlatform.fetchCargoVendor {
     inherit (finalAttrs) pname version src;
     hash = versionData.cargoDepsHash;
@@ -288,9 +281,7 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   # ── Update automation ────────────────────────────────────────────── #
-  # `nix-update --flake dbx-desktop` (driven by ./update.sh and the
-  # scheduled "Update dbx-desktop" workflow) refreshes version, src hash,
-  # pnpmDeps hash and the fetchCargoVendor hash in one pass.
+  # `./update.sh` refreshes the version and every hash above in one pass.
   passthru.updateScript = ./update.sh;
 
   # ── Metadata ─────────────────────────────────────────────────────── #

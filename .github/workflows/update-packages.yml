@@ -1,15 +1,47 @@
 name: Update packages
 
-# Every package that ships `pkgs/<name>/update.sh` + `pkgs/<name>/hashes.json`
-# is updated here, in parallel, one pull request per package. See README
-# "Automatic updates" for the convention a package has to follow.
+# Automatic updates for this repository. This comment is the reference for how
+# the updater works and why; README "Automatic updates" only documents the
+# convention a package has to follow (hashes.json + update.sh).
+#
+# What a run does: bump the pinned nixpkgs once, update every package against
+# it, verify the changed ones build, and open a single pull request.
+#
+# ── Why the lock bump lives here and not in dependabot ─────────────────── #
+# Several fixed-output hashes (`pnpmDepsHash`, `npmDepsHash`, `cargoDepsHash`,
+# …) are a function of the nixpkgs toolchain, not of the upstream sources
+# alone: nixpkgs promoting pnpm 11 to 12 changed every pnpm hash here while
+# the package versions stayed put. Dependabot would bump flake.lock *without*
+# re-deriving those hashes, so a lock-only change could land with stale hashes
+# behind it and break build.yml on main. Bumping the lock in this workspace and
+# re-deriving the hashes against it keeps the two in one pull request — that is
+# the `UPDATE_DEPS_ONLY` pass in "Update packages" below. For the same reason
+# `.github/dependabot.yml` leaves flake.lock to this workflow.
+#
+# ── Why one batch instead of one job per package ──────────────────────── #
+# While every package ran as its own matrix job, each job bumped the same lock
+# and therefore opened its own copy of it: N identical "update nixpkgs" pull
+# requests for a single lock change. One batch keeps the invariant without the
+# duplicates. A package that fails no longer aborts the run either; its edits
+# are reverted, it is reported in the PR body, and the run is failed at the end.
+#
+# ── Why a lock-only run usually opens nothing ─────────────────────────── #
+# On a daily schedule "nixpkgs moved, but no hash drifted" is the normal
+# outcome, and filing that pull request every day is noise. The bump rides
+# along with the next package change instead; a lock-only PR is only opened
+# once the pin has been sitting still for a week, or on a manual run. See the
+# `lock_max_age_days` gate in "Collect changes".
+#
+# ── Why the schedule is where it is ───────────────────────────────────── #
+# GitHub's cron delivery is best-effort: this repository's history shows
+# schedule runs landing one to two hours late, and a weekly slot that was
+# dropped entirely. Hence the deliberate off-the-hour minute, and a daily
+# cadence so that a delayed or dropped slot costs at most a day of drift.
 
 on:
   schedule:
-    # Weekly, Monday 03:00 UTC. `*/7` in the day-of-month field is NOT "every
-    # seven days": it restarts at each month boundary and would fire again
-    # after only 2-3 days.
-    - cron: '0 3 * * 1'
+    # Daily, deliberately off the hour; see "Why the schedule is where it is".
+    - cron: '23 4 * * *'
   workflow_dispatch:
     inputs:
       packages:
@@ -36,50 +68,22 @@ permissions:
   pull-requests: write
 
 jobs:
-  plan:
-    runs-on: ubuntu-latest
-    outputs:
-      packages: ${{ steps.list.outputs.packages }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Determine packages
-        id: list
-        env:
-          REQUESTED: ${{ inputs.packages }}
-        run: |
-          set -euo pipefail
-          if [ -n "${REQUESTED:-}" ]; then
-            packages="$REQUESTED"
-          else
-            packages="$(find pkgs -mindepth 2 -maxdepth 2 -name update.sh -printf '%h\n' \
-              | xargs -r -n1 basename | sort | tr '\n' ' ')"
-          fi
-          if [ -z "${packages// /}" ]; then
-            echo "error: no package with pkgs/<name>/update.sh was found" >&2
-            exit 1
-          fi
-          read -ra names <<< "$packages"
-          echo "packages=$(printf '%s\n' "${names[@]}" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
-          echo "Updating: $packages"
-
   update:
-    needs: plan
     runs-on: ubuntu-latest
-    strategy:
-      # One broken package must not block the others.
-      fail-fast: false
-      matrix:
-        package: ${{ fromJSON(needs.plan.outputs.packages) }}
-    # Serialise runs per package; never cancel one halfway through, or the PR
-    # branch could be left without its verification build.
+    # One run at a time; never cancel one halfway through, or the PR branch
+    # could be left without its verification build.
     concurrency:
-      group: update-${{ matrix.package }}
+      group: update-packages
       cancel-in-progress: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          # The lock-only PR gate reads flake.lock's own history. A depth-1
+          # checkout truncates it so that the shallow boundary commit looks like
+          # it touched every file, which would make the pin look brand new on
+          # every run and suppress the pull request forever.
+          fetch-depth: 0
 
       - name: Install nix
         uses: cachix/install-nix-action@v31
@@ -94,60 +98,133 @@ jobs:
           name: npc-z
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
-      # nixpkgs moves the pnpm/node toolchain that several fixed-output hashes
-      # depend on. Bumping the lock first and re-deriving the hashes in the same
-      # workspace keeps the two in one pull request, so a lock-only change can
-      # never leave main with hashes that no longer match.
+      - name: Determine packages
+        env:
+          REQUESTED: ${{ inputs.packages }}
+        run: |
+          set -euo pipefail
+          if [ -n "${REQUESTED:-}" ]; then
+            packages="$REQUESTED"
+          else
+            packages="$(find pkgs -mindepth 2 -maxdepth 2 -name update.sh -printf '%h\n' \
+              | xargs -r -n1 basename | sort | tr '\n' ' ')"
+          fi
+          if [ -z "${packages// /}" ]; then
+            echo "error: no package with pkgs/<name>/update.sh was found" >&2
+            exit 1
+          fi
+          echo "PACKAGES=$packages" >> "$GITHUB_ENV"
+          echo "Updating: $packages"
+
+      # Bumped once, before any package, so every hash below is derived against
+      # the same revision.
       - name: Update flake.lock
         if: github.event_name == 'schedule' || inputs.flake
         run: nix flake update nixpkgs
 
-      - name: Update ${{ matrix.package }}
+      - name: Update packages
+        id: update
         env:
           # nix-update reads this for its (paginated) GitHub releases query.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPDATE_VERSION: ${{ inputs.version }}
         run: |
-          nix shell --inputs-from . nixpkgs#nix-update \
-            -c "./pkgs/${{ matrix.package }}/update.sh"
-          # Nothing moved? Dependency hashes can still have drifted with the
-          # nixpkgs pinned in flake.lock, because its pnpm/node toolchain moves
-          # under them. Re-derive just the hashes and let the PR heal that.
-          if [ -z "$(git status --porcelain -- "pkgs/${{ matrix.package }}")" ]; then
-            UPDATE_DEPS_ONLY=1 nix shell --inputs-from . nixpkgs#nix-update \
-              -c "./pkgs/${{ matrix.package }}/update.sh"
+          # A failing package must not abort the loop: the failure is recorded
+          # and reported instead, and the packages that did update still deserve
+          # a pull request. (`if`/`||` guards are what keep the shell's -e from
+          # ending the step on the first broken package.)
+          set -uo pipefail
+          failed=""
+          for package in $PACKAGES; do
+            echo "::group::update $package"
+            if ! nix shell --inputs-from . nixpkgs#nix-update \
+                 -c "./pkgs/$package/update.sh"; then
+              # A failed nix-update can leave a half-written hashes.json
+              # behind. This run continues, so drop that package's edits
+              # instead of committing them.
+              git checkout -- "pkgs/$package"
+              git clean -fdq -- "pkgs/$package"
+              failed="$failed $package"
+            elif [ -z "$(git status --porcelain -- "pkgs/$package")" ]; then
+              # No upstream release: re-derive the dependency hashes against
+              # the lock bumped above.
+              UPDATE_DEPS_ONLY=1 nix shell --inputs-from . nixpkgs#nix-update \
+                -c "./pkgs/$package/update.sh" || failed="$failed $package"
+            fi
+            echo "::endgroup::"
+          done
+          echo "failed=${failed# }" >> "$GITHUB_OUTPUT"
+          if [ -n "${failed// /}" ]; then
+            echo "::warning::nix-update failed for:$failed"
           fi
+          # Partial failures are reported at the end of the run; they must not
+          # turn into a failed step here, because the pull request still has to
+          # be opened.
+          exit 0
 
-      - name: Detect changes
+      - name: Collect changes
         id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          package='${{ matrix.package }}'
-          if [ -z "$(git status --porcelain -- "pkgs/$package" flake.lock)" ]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "$package is already up to date."
-            exit 0
+          set -uo pipefail
+          # Lock-only pull requests: see "Why a lock-only run usually opens
+          # nothing" in the header. 0 = never open one.
+          lock_max_age_days=6
+          : > "$RUNNER_TEMP/changes.tsv"
+          changed_packages=""
+          for package in $PACKAGES; do
+            if [ -z "$(git status --porcelain -- "pkgs/$package")" ]; then
+              continue
+            fi
+            changed_packages="$changed_packages $package"
+            version="$(nix eval --raw ".#$package.version" 2>/dev/null || true)"
+            # HEAD is still the base checkout: the bot does not commit.
+            base_version="$(git show "HEAD:pkgs/$package/hashes.json" 2>/dev/null | jq -r .version || true)"
+            release="$(nix eval --raw ".#$package.meta.changelog" 2>/dev/null || true)"
+            if [ -z "$release" ]; then
+              release="$(nix eval --raw ".#$package.meta.homepage" 2>/dev/null || true)"
+            fi
+            if [ -n "$version" ] && [ "$version" != "$base_version" ]; then
+              kind=update
+            else
+              kind=hashes
+              version="$base_version"
+            fi
+            printf '%s\t%s\t%s\t%s\t%s\n' \
+              "$package" "$kind" "$version" "$base_version" "$release" \
+              >> "$RUNNER_TEMP/changes.tsv"
+          done
+          lock_changed=false
+          if [ -n "$(git status --porcelain -- flake.lock)" ]; then
+            lock_changed=true
           fi
-          version="$(nix eval --raw ".#$package.version")"
-          # HEAD is still the base checkout: the bot does not commit.
-          base_version="$(git show "HEAD:pkgs/$package/hashes.json" 2>/dev/null | jq -r .version || true)"
-          release="$(nix eval --raw ".#$package.meta.changelog" 2>/dev/null || true)"
-          if [ -z "$release" ]; then
-            release="$(nix eval --raw ".#$package.meta.homepage" 2>/dev/null || true)"
+          changed=false
+          if [ -n "${changed_packages// /}" ]; then
+            changed=true
+          elif [ "$lock_changed" = true ]; then
+            last_bump="$(git log -1 --format=%ct -- flake.lock || true)"
+            age_days=$(( ( $(date +%s) - ${last_bump:-0} ) / 86400 ))
+            if [ "${EVENT_NAME:-}" = workflow_dispatch ]; then
+              echo "flake.lock is ${age_days}d old: opening it on request."
+              changed=true
+            elif [ "$lock_max_age_days" -gt 0 ] && [ "$age_days" -ge "$lock_max_age_days" ]; then
+              echo "flake.lock is ${age_days}d old: opening the nixpkgs-only pull request."
+              changed=true
+            else
+              echo "nixpkgs moved, but flake.lock is only ${age_days}d old: no lock-only pull request this run."
+            fi
           fi
-          if [ "$version" != "$base_version" ]; then
-            title="$package: update to $version"
-          elif [ -n "$(git status --porcelain -- "pkgs/$package")" ]; then
-            title="$package: refresh dependency hashes"
-          else
-            title="$package: update nixpkgs"
+          echo "packages=${changed_packages# }" >> "$GITHUB_OUTPUT"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          if [ "$changed" = false ]; then
+            if [ "$lock_changed" = true ]; then
+              echo "Nothing to open: every package is up to date and the nixpkgs bump is not due yet."
+            else
+              echo "Nothing to do: every package is up to date and nixpkgs has not moved."
+            fi
           fi
-          {
-            echo "changed=true"
-            echo "version=$version"
-            echo "release=$release"
-            echo "title=$title"
-          } >> "$GITHUB_OUTPUT"
-          git --no-pager diff --stat -- "pkgs/$package" flake.lock
+          git --no-pager diff --stat -- pkgs flake.lock
 
       # A build realises every fixed-output dependency before compiling, so a
       # stale hash fails here within minutes; there is no separate hash-only
@@ -159,10 +236,121 @@ jobs:
       # UPDATE_TOKEN (a fine-grained PAT) below makes the pull request
       # user-authored, so its CI runs on its own — and this build still guards
       # the case where no PAT is configured.
-      - name: Verify package build
+      - name: Verify package builds
         id: build
         if: steps.changes.outputs.changed == 'true' && (github.event_name == 'schedule' || inputs.build)
-        run: nix build -L ".#${{ matrix.package }}"
+        env:
+          CHANGED: ${{ steps.changes.outputs.packages }}
+        run: |
+          # A failed build is recorded and reported in the pull request body
+          # rather than being fatal here, so one package cannot withhold the
+          # updates of the others. The run is failed at the end instead.
+          set -uo pipefail
+          : > "$RUNNER_TEMP/builds.tsv"
+          failed=""
+          for package in $CHANGED; do
+            echo "::group::build $package"
+            if nix build -L ".#$package"; then
+              result=success
+            else
+              result=failure
+              failed="$failed $package"
+            fi
+            echo "::endgroup::"
+            printf '%s\t%s\n' "$package" "$result" >> "$RUNNER_TEMP/builds.tsv"
+          done
+          echo "failed=${failed# }" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Compose pull request
+        id: pr
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          UPDATE_FAILED: ${{ steps.update.outputs.failed }}
+        run: |
+          set -uo pipefail
+          update_failed="${UPDATE_FAILED:-}"
+          declare -A build_status=()
+          if [ -f "$RUNNER_TEMP/builds.tsv" ]; then
+            while IFS=$'\t' read -r package result; do
+              [ -n "$package" ] && build_status["$package"]="$result"
+            done < "$RUNNER_TEMP/builds.tsv"
+          fi
+
+          items=()
+          bumped=0
+          if [ -f "$RUNNER_TEMP/changes.tsv" ]; then
+            while IFS=$'\t' read -r package kind version base release; do
+              [ -n "$package" ] || continue
+              if [ "$kind" = update ]; then
+                items+=("$package $version")
+                bumped=$((bumped + 1))
+              else
+                items+=("$package")
+              fi
+            done < "$RUNNER_TEMP/changes.tsv"
+          fi
+
+          # Keep the familiar "<package>: update to <version>" title when a run
+          # moves exactly one package; summarise anything wider.
+          if [ "${#items[@]}" -eq 0 ]; then
+            title="chore: bump nixpkgs"
+          elif [ "${#items[@]}" -eq 1 ] && [ "$bumped" -eq 1 ]; then
+            title="${items[0]%% *}: update to ${items[0]#* }"
+          else
+            list=""
+            for item in "${items[@]:0:3}"; do
+              list="$list, $item"
+            done
+            list="${list#, }"
+            more=""
+            if [ "${#items[@]}" -gt 3 ]; then
+              more=" +$(( ${#items[@]} - 3 )) more"
+            fi
+            title="auto: update $list$more"
+          fi
+
+          # Everything dynamic goes into the `changes` output; the surrounding
+          # prose lives in the create-pull-request step below.
+          {
+            if [ -n "$(git status --porcelain -- flake.lock)" ]; then
+              old_rev="$(git show HEAD:flake.lock | jq -r '.nodes.nixpkgs.locked.rev' | cut -c1-7)"
+              new_rev="$(jq -r '.nodes.nixpkgs.locked.rev' flake.lock | cut -c1-7)"
+              echo "nixpkgs: \`$old_rev\` → \`$new_rev\`"
+              echo
+            fi
+            echo '| package | change | build | release notes |'
+            echo '| --- | --- | --- | --- |'
+            if [ -f "$RUNNER_TEMP/changes.tsv" ]; then
+              while IFS=$'\t' read -r package kind version base release; do
+                [ -n "$package" ] || continue
+                if [ "$kind" = update ]; then
+                  change="$base → $version"
+                else
+                  change='dependency hashes refreshed'
+                fi
+                result="${build_status[$package]:-not run}"
+                if [ -n "$release" ]; then
+                  notes="[release]($release)"
+                else
+                  notes='—'
+                fi
+                echo "| \`$package\` | $change | $result | $notes |"
+              done < "$RUNNER_TEMP/changes.tsv"
+            fi
+            if [ -n "${update_failed// /}" ]; then
+              echo
+              echo "> **Warning:** \`nix-update\` failed for \`$update_failed\`; those packages are"
+              echo '> not part of this pull request (their partial edits were reverted).'
+            fi
+          } > "$RUNNER_TEMP/changes.md"
+
+          {
+            echo "title=$title"
+            echo 'changes<<CHANGES_EOF'
+            cat "$RUNNER_TEMP/changes.md"
+            echo 'CHANGES_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create pull request
         if: steps.changes.outputs.changed == 'true'
@@ -171,27 +359,47 @@ jobs:
           # Falls back to GITHUB_TOKEN until the UPDATE_TOKEN secret exists, so
           # the workflow keeps working while the PAT is being set up.
           token: ${{ secrets.UPDATE_TOKEN || secrets.GITHUB_TOKEN }}
-          branch: auto/update-${{ matrix.package }}
+          branch: auto/update-packages
           base: main
           delete-branch: true
-          # Keep the bot's commit limited to the package directory plus the lock
-          # bump whose hashes it re-derived.
+          # Keep the bot's commit limited to the lock bump and the package data
+          # it re-derived.
           add-paths: |
             flake.lock
-            pkgs/${{ matrix.package }}
+            pkgs
           labels: dependencies
-          commit-message: '${{ steps.changes.outputs.title }}'
-          title: '${{ steps.changes.outputs.title }}'
+          commit-message: ${{ steps.pr.outputs.title }}
+          title: ${{ steps.pr.outputs.title }}
           body: |
-            Automated `nix-update` run for `${{ matrix.package }}` (`${{ steps.changes.outputs.version }}`).
+            Automated `nix-update` run of `.github/workflows/update-packages.yml`.
 
-            `pkgs/${{ matrix.package }}/hashes.json` — and `flake.lock` when nixpkgs
-            moved — are the only expected changes.
-            ${{ steps.changes.outputs.release && format('Release notes: {0}', steps.changes.outputs.release) || '' }}
+            One pull request per run: the `flake.lock` bump and every package change it
+            invalidates land together, so no package can arrive with stale hashes behind it.
 
-            Verification performed in this workflow run:
-            - full package build: `${{ steps.build.outcome }}` (pushed to the `npc-z` cache)
+            ${{ steps.pr.outputs.changes }}
 
-            > Opened by `.github/workflows/update-packages.yml`, which runs weekly.
-            > The same branch is reused, so an open PR is updated in place instead
-            > of a new one being opened on every upstream release.
+            `pkgs/<name>/hashes.json` — and `flake.lock` — are the only expected changes;
+            the updater never touches a packaging expression.
+
+            > Opened by `.github/workflows/update-packages.yml`, which runs daily.
+            > The same branch is reused, so this pull request is updated in place
+            > instead of a new one being opened on every run.
+
+      # The pull request has been opened by now; failing afterwards is what
+      # makes a broken package visible without discarding everyone else's work.
+      - name: Fail when a package could not be updated or built
+        if: always() && (steps.update.outputs.failed != '' || steps.build.outputs.failed != '')
+        env:
+          UPDATE_FAILED: ${{ steps.update.outputs.failed }}
+          BUILD_FAILED: ${{ steps.build.outputs.failed }}
+        run: |
+          set -euo pipefail
+          update_failed="${UPDATE_FAILED:-}"
+          build_failed="${BUILD_FAILED:-}"
+          if [ -n "${update_failed// /}" ]; then
+            echo "::error::nix-update failed for: $update_failed"
+          fi
+          if [ -n "${build_failed// /}" ]; then
+            echo "::error::verification build failed for: $build_failed"
+          fi
+          exit 1

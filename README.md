@@ -67,12 +67,26 @@ Use this repository in `flake.nix`:
 
 ## Automatic updates
 
-[`update-packages.yml`](.github/workflows/update-packages.yml) runs every
-Monday: for each package it checks upstream for a new release, verifies the
-package builds, and opens (or refreshes) a pull request on the
-`auto/update-<package>` branch. Today it maintains `dbx-desktop`, `microneo`
-and `mousedroid`; a new package joins simply by following the convention
-below.
+[`update-packages.yml`](.github/workflows/update-packages.yml) runs daily and
+opens at most one pull request on `auto/update-packages`: it bumps the pinned
+nixpkgs, checks every package for a new upstream release, and verifies the
+changed ones build. Today it maintains `dbx-desktop`, `microneo` and
+`mousedroid`; a new package joins by following the convention below.
+
+The workflow's own comment is the reference for how and why it works — the
+schedule, the batching, `flake.lock` ownership and the hash re-derivation are
+all documented there. Two consequences are worth knowing from the outside:
+
+- **`flake.lock` is owned by the bot**, not dependabot, because the dependency
+  hashes are a function of the pinned nixpkgs toolchain rather than of the
+  upstream sources alone: the bump and the hashes it invalidates land in the
+  same pull request. A pull request that would contain nothing but the lock is
+  only opened once the pin is a week old, or on a manual run; pass
+  `flake: false` on a manual run to leave nixpkgs untouched.
+- **[`build.yml`](.github/workflows/build.yml) builds against the pinned
+  nixpkgs** — evaluating the package set against three channels is only a
+  compatibility signal — so packages pass their toolchain explicitly
+  (`pnpm = pnpm_11`) instead of relying on a default that nixpkgs may retarget.
 
 ### Convention
 
@@ -100,31 +114,6 @@ below.
 
 The updater (`nix-update`) then rewrites `hashes.json` alone, so a bot pull
 request only ever changes data — never packaging code.
-
-### Why builds are pinned, and hash drift
-
-[`build.yml`](.github/workflows/build.yml) evaluates the package set against
-three nixpkgs channels (compatibility signal) but **builds against the nixpkgs
-revision pinned in `flake.lock`** — the same revision the updater derives
-hashes with.
-
-That matters because some fixed-output hashes are a function of the nixpkgs
-toolchain, not just of the upstream sources: `fetchPnpmDeps` output changes
-when the pnpm version changes (`pkgs.pnpm` moved from 11.x to 12.x on
-unstable), so a hash can never match a *moving* channel. For the same reason,
-packages must pass their toolchain explicitly (e.g. `pnpm = pnpm_11`) instead
-of relying on a default that nixpkgs may retarget.
-
-When the toolchain does move — say a `flake.lock` bump — every package's
-dependency hashes are re-derived automatically: the weekly workflow bumps
-`flake.lock` first, then tries a normal update, and if the version is already
-current it runs `update.sh` again with `UPDATE_DEPS_ONLY=1`, which refreshes
-only the hashes.
-
-Because of that, **`flake.lock` is owned by the bot**, not dependabot: the lock
-bump and the hashes it invalidates travel in the same pull request, so a
-lock-only change can never land with stale hashes behind it. Pass
-`flake: false` on a manual run to update a package without bumping nixpkgs.
 
 ### The `UPDATE_TOKEN` secret
 
