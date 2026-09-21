@@ -1,6 +1,6 @@
 {
-  "version": "0.6.16",
-  "srcHash": "sha256-ogOerLqprzq6Yzr/hKaHsJoZppIJvTz+sEVnV39ys5U=",
+  "version": "0.6.18",
+  "srcHash": "sha256-ftaK1tPycFAZ9w0k8R/A1saAJL0kOurcPDceSzw5EbY=",
   "pnpmDepsHash": "sha256-8hA97KK+5J9w1YZpMEQuzFZnsXMuIQ0oSYySc3AVGcg=",
-  "cargoDepsHash": "sha256-4GMlPoc6VrKEmJIh1mXNeWRziomTtlxFG9CuKjFa3Yk="
+  "cargoDepsHash": "sha256-s8GWKbou4OuICZ0vM2OlNblv0tXBQ3zgMh1ryctkf5M="
 }
