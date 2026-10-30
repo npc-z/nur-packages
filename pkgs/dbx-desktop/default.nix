@@ -4,7 +4,7 @@
 , fetchPnpmDeps
 , pnpmConfigHook
 , nodejs_22
-, pnpm_11
+, pnpm_10
 , rustPlatform
 , pkg-config
 , perl
@@ -56,11 +56,19 @@ stdenv.mkDerivation (finalAttrs: {
   pnpmDeps = fetchPnpmDeps {
     inherit (finalAttrs) pname version src;
     # Pin the fetcher to the same pnpm the build uses. By default
-    # `fetchPnpmDeps` follows `pkgs.pnpm`, which moves across nixpkgs
-    # revisions (e.g. 11.x -> 12.x); an un-pinned fetcher would then produce a
-    # store this expression's `pnpm_11` cannot consume.
-    pnpm = pnpm_11;
-    # `fetcherVersion = 4` is supported for `pnpm_11`
+    # `fetchPnpmDeps` follows `pkgs.pnpm`, which nixpkgs retargets across
+    # revisions (12.x at the time of writing), so an un-pinned fetcher would
+    # produce a store this expression's pnpm cannot consume.
+    #
+    # Deliberately pnpm 10 and not 11: upstream's pnpm-lock.yaml is generated
+    # by its `packageManager` pin (pnpm@10.34.7), which still applies
+    # `pnpm.overrides` from package.json. pnpm 11 no longer reads the `pnpm`
+    # field in package.json at all, so dbx's `happy-dom` / `@codemirror/view`
+    # overrides are dropped and the frozen install fails with
+    # ERR_PNPM_LOCKFILE_CONFIG_MISMATCH against the upstream lockfile.
+    pnpm = pnpm_10;
+    # nixpkgs supports fetcherVersion 3, 4 and 5; 4 works for pnpm 10 as well
+    # (only 3 is rejected for pnpm 11+).
     fetcherVersion = 4;
     hash = versionData.pnpmDepsHash;
   };
@@ -83,7 +91,7 @@ stdenv.mkDerivation (finalAttrs: {
     rustPlatform.rust.rustc
     rustPlatform.cargoSetupHook
     nodejs_22
-    pnpm_11
+    pnpm_10
     pnpmConfigHook
     pkg-config
     perl
